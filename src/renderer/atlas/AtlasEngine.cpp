@@ -12,6 +12,9 @@
 #include <shader_wireframe.h>
 #include <shader_vs.h>
 
+#pragma warning(disable : 4701)
+#include <TracyD3D11.hpp>
+
 #include "../../interactivity/win32/CustomWindowMessages.h"
 
 // #### NOTE ####
@@ -608,7 +611,9 @@ void AtlasEngine::_createResources()
     _r.device = device.query<ID3D11Device1>();
     _r.deviceContext = deviceContext.query<ID3D11DeviceContext1>();
 
-    if (featureLevel < D3D_FEATURE_LEVEL_10_0)
+    TracyD3D11Context(_r.device.get(), _r.deviceContext.get())
+
+        if (featureLevel < D3D_FEATURE_LEVEL_10_0)
     {
         _r.d2dMode = true;
     }

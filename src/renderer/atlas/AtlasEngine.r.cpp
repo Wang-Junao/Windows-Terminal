@@ -5,8 +5,8 @@
 #include "AtlasEngine.h"
 
 #include <til/small_vector.h>
+#include <Tracy.hpp>
 
-#include "AtlasEngine.h"
 #include "dwrite.h"
 
 // #### NOTE ####
@@ -524,7 +524,7 @@ try
             }
         }
 
-        if constexpr (true)
+        if constexpr (false)
         {
             _r.deviceContext->RSSetState(_r.wireframeRasterizerState.get());
             _r.deviceContext->PSSetShader(_r.wireframePixelShader.get(), nullptr, 0);
@@ -585,6 +585,7 @@ try
         WI_SetFlag(_api.invalidations, ApiInvalidations::Device);
     }
 
+    FrameMark
     return S_OK;
 }
 catch (const wil::ResultException& exception)
