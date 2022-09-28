@@ -169,4 +169,10 @@ class StringTests
             VERIFY_ARE_EQUAL("", s);
         }
     }
+
+    TEST_METHOD(LegalPath)
+    {
+        VERIFY_IS_TRUE(til::is_legal_path(LR"(C:\Users\Documents and Settings\Users\;\Why not)"));
+        VERIFY_IS_FALSE(til::is_legal_path(LR"(C:\Users\Documents and Settings\"Quote-un-quote users")"));
+    }
 };
