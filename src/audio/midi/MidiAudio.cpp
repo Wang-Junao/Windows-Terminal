@@ -5,9 +5,9 @@
 #include "MidiAudio.hpp"
 #include "../terminal/parser/stateMachine.hpp"
 
-#include <dsound.h>
-
-#pragma comment(lib, "dxguid.lib")
+#include <mmsystem.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
 
 using Microsoft::WRL::ComPtr;
 using namespace std::chrono_literals;
@@ -17,22 +17,18 @@ using namespace std::chrono_literals;
 constexpr auto WAVE_SIZE = 16u;
 constexpr auto WAVE_DATA = std::array<byte, WAVE_SIZE>{ 128, 159, 191, 223, 255, 223, 191, 159, 128, 96, 64, 32, 0, 32, 64, 96 };
 
-MidiAudio::MidiAudio(HWND windowHandle)
+MidiAudio::MidiAudio(HWND)
 {
-    _directSoundModule.reset(LoadLibraryExW(L"dsound.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
-    if (_directSoundModule)
-    {
-        if (auto createFunction = GetProcAddressByFunctionDeclaration(_directSoundModule.get(), DirectSoundCreate8))
-        {
-            if (SUCCEEDED(createFunction(nullptr, &_directSound, nullptr)))
-            {
-                if (SUCCEEDED(_directSound->SetCooperativeLevel(windowHandle, DSSCL_NORMAL)))
-                {
-                    _createBuffers();
-                }
-            }
-        }
-    }
+    const auto enumerator = wil::CoCreateInstance<MMDeviceEnumerator, IMMDeviceEnumerator>();
+    THROW_IF_FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, _device.put()));
+    THROW_IF_FAILED(_device->Activate(__uuidof(_client), CLSCTX_ALL, NULL, _client.put_void()));
+
+    wil::unique_any<WAVEFORMATEX*, decltype(&::CoTaskMemFree), ::CoTaskMemFree> format;
+    THROW_IF_FAILED(_client->GetMixFormat(format.addressof()));
+    THROW_IF_FAILED(_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 0, 0, format.get(), NULL));
+
+    _event.create();
+    THROW_IF_FAILED(_client->SetEventHandle(_event.get()));
 }
 
 MidiAudio::~MidiAudio() noexcept
@@ -84,8 +80,7 @@ void MidiAudio::Unlock()
 void MidiAudio::PlayNote(const int noteNumber, const int velocity, const std::chrono::microseconds duration) noexcept
 try
 {
-    const auto& buffer = _buffers.at(_activeBufferIndex);
-    if (velocity && buffer)
+    if (velocity)
     {
         // The formula for frequency is 2^(n/12) * 440Hz, where n is zero for
         // the A above middle C (A4). In MIDI terms, A4 is note number 69,
@@ -93,12 +88,13 @@ try
         // of the wave form to determine the frequency that the sound buffer
         // has to be played to achieve the equivalent note frequency.
         const auto frequency = std::pow(2.0, (noteNumber - 69.0) / 12.0) * 440.0 * WAVE_SIZE;
-        buffer->SetFrequency(gsl::narrow_cast<DWORD>(frequency));
         // For the volume, we're using the formula defined in the General
         // MIDI Level 2 specification: Gain in dB = 40 * log10(v/127). We need
         // to multiply by 4000, though, because the SetVolume method expects
         // the volume to be in hundredths of a decibel.
         const auto volume = 4000.0 * std::log10(velocity / 127.0);
+        
+        buffer->SetFrequency(gsl::narrow_cast<DWORD>(frequency));
         buffer->SetVolume(gsl::narrow_cast<LONG>(volume));
         // Resetting the buffer to a position that is slightly off from the
         // last position will help to produce a clearer separation between
@@ -111,48 +107,12 @@ try
     // of the wait early if we've been shutdown.
     _shutdownFuture.wait_for(duration);
 
-    if (velocity && buffer)
+    if (velocity)
     {
         // When the note ends, we just turn the volume down instead of stopping
         // the sound buffer. This helps reduce unwanted static between notes.
         buffer->SetVolume(DSBVOLUME_MIN);
         buffer->GetCurrentPosition(&_lastBufferPosition, nullptr);
     }
-
-    // Cycling between multiple buffers can also help reduce the static.
-    _activeBufferIndex = (_activeBufferIndex + 1) % _buffers.size();
 }
 CATCH_LOG()
-
-void MidiAudio::_createBuffers() noexcept
-{
-    auto waveFormat = WAVEFORMATEX{};
-    waveFormat.wFormatTag = WAVE_FORMAT_PCM;
-    waveFormat.nChannels = 1;
-    waveFormat.nSamplesPerSec = 8000;
-    waveFormat.wBitsPerSample = 8;
-    waveFormat.nBlockAlign = waveFormat.nChannels * waveFormat.wBitsPerSample / 8;
-    waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
-
-    auto bufferDescription = DSBUFFERDESC{};
-    bufferDescription.dwSize = sizeof(DSBUFFERDESC);
-    bufferDescription.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY | DSBCAPS_GLOBALFOCUS;
-    bufferDescription.dwBufferBytes = WAVE_SIZE;
-    bufferDescription.lpwfxFormat = &waveFormat;
-
-    for (auto& buffer : _buffers)
-    {
-        if (SUCCEEDED(_directSound->CreateSoundBuffer(&bufferDescription, &buffer, nullptr)))
-        {
-            LPVOID bufferPtr;
-            DWORD bufferSize;
-            if (SUCCEEDED(buffer->Lock(0, 0, &bufferPtr, &bufferSize, nullptr, nullptr, DSBLOCK_ENTIREBUFFER)))
-            {
-                std::memcpy(bufferPtr, WAVE_DATA.data(), WAVE_DATA.size());
-                buffer->Unlock(bufferPtr, bufferSize, nullptr, 0);
-            }
-            buffer->SetVolume(DSBVOLUME_MIN);
-            buffer->Play(0, 0, DSBPLAY_LOOPING);
-        }
-    }
-}
