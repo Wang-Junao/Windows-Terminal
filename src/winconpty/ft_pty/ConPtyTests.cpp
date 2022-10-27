@@ -10,7 +10,10 @@ using namespace WEX::TestExecution;
 
 class ConPtyTests
 {
-    TEST_CLASS(ConPtyTests);
+    BEGIN_TEST_CLASS(ConPtyTests)
+        TEST_CLASS_PROPERTY(L"TestTimeout", L"0:0:10") // 10s timeout
+    END_TEST_CLASS()
+
     const COORD defaultSize = { 80, 30 };
     TEST_METHOD(CreateConPtyNoPipes);
     TEST_METHOD(CreateConPtyBadSize);
@@ -334,9 +337,10 @@ void ConPtyTests::DiesOnClose()
     VERIFY_ARE_EQUAL(dwExit, (DWORD)STILL_ACTIVE);
 
     Log::Comment(NoThrowString().Format(L"Sleep a bit to let the process attach"));
-    Sleep(100);
+    Sleep(500);
 
-    _ClosePseudoConsoleMembers(&pty, TRUE);
+    _ClosePseudoConsoleMembers(&pty, FALSE);
+    Sleep(500);
 
     GetExitCodeProcess(hConPtyProcess.get(), &dwExit);
     VERIFY_ARE_NOT_EQUAL(dwExit, (DWORD)STILL_ACTIVE);
