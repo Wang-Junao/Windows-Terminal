@@ -285,7 +285,6 @@ namespace winrt::TerminalApp::implementation
     // - Handle changes to the tab width set by the user
     void TerminalPage::_UpdateTabWidthMode()
     {
-        _tabView.TabWidthMode(_settings.GlobalSettings().TabWidthMode());
     }
 
     // Method Description:
@@ -594,13 +593,6 @@ namespace winrt::TerminalApp::implementation
         }
         else
         {
-            CommandPalette().SetTabs(_tabs, _mruTabs);
-
-            // Otherwise, set up the tab switcher in the selected mode, with
-            // the given ordering, and make it visible.
-            CommandPalette().EnableTabSwitcherMode(index, tabSwitchMode);
-            CommandPalette().Visibility(Visibility::Visible);
-            CommandPalette().SelectNextItem(bMoveRight);
         }
     }
 
@@ -662,13 +654,6 @@ namespace winrt::TerminalApp::implementation
     // - the index of the currently focused tab if there is one, else nullopt
     std::optional<uint32_t> TerminalPage::_GetFocusedTabIndex() const noexcept
     {
-        // GH#1117: This is a workaround because _tabView.SelectedIndex()
-        //          sometimes return incorrect result after removing some tabs
-        uint32_t focusedIndex;
-        if (_tabView.TabItems().IndexOf(_tabView.SelectedItem(), focusedIndex))
-        {
-            return focusedIndex;
-        }
         return std::nullopt;
     }
 
@@ -908,7 +893,6 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        CommandPalette().Visibility(Visibility::Collapsed);
         _UpdateTabView();
     }
 
@@ -946,22 +930,6 @@ namespace winrt::TerminalApp::implementation
         {
             _tabContent.Children().Clear();
             _tabContent.Children().Append(tab.Content());
-
-            // GH#7409: If the tab switcher is open, then we _don't_ want to
-            // automatically focus the new tab here. The tab switcher wants
-            // to be able to "preview" the selected tab as the user tabs
-            // through the menu, but if we toss the focus to the control
-            // here, then the user won't be able to navigate the ATS any
-            // longer.
-            //
-            // When the tab switcher is eventually dismissed, the focus will
-            // get tossed back to the focused terminal control, so we don't
-            // need to worry about focus getting lost.
-            if (CommandPalette().Visibility() != Visibility::Visible)
-            {
-                tab.Focus(FocusState::Programmatic);
-                _UpdateMRUTab(tab);
-            }
 
             tab.TabViewItem().StartBringIntoView();
 

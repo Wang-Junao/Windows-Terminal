@@ -614,7 +614,7 @@ void AppHost::_HandleCreateWindow(const HWND hwnd, til::rect proposedRect, Launc
         proposedRect.top = monitorInfo.rcWork.top;
     }
 
-    auto initialSize = _logic.GetLaunchDimensions(dpix);
+    winrt::Windows::Foundation::Size initialSize {1730.00000, 924.000000 };
 
     const auto islandWidth = Utils::ClampToShortMax(
         static_cast<long>(ceil(initialSize.Width)), 1);

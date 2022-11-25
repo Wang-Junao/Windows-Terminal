@@ -137,7 +137,6 @@ namespace winrt::TerminalApp::implementation
         // happen before the Settings UI is reloaded and tries to re-read
         // those values.
         _UpdateCommandsForPalette();
-        CommandPalette().SetActionMap(_settings.ActionMap());
 
         if (needRefreshUI)
         {
@@ -177,74 +176,9 @@ namespace winrt::TerminalApp::implementation
         // Hookup the key bindings
         _HookupKeyBindings(_settings.ActionMap());
 
-        _tabContent = this->TabContent();
-        _tabRow = this->TabRow();
-        _tabView = _tabRow.TabView();
         _rearranging = false;
 
-        const auto isElevated = IsElevated();
-
-        _tabRow.PointerMoved({ get_weak(), &TerminalPage::_RestorePointerCursorHandler });
-        _tabView.CanReorderTabs(!isElevated);
-        _tabView.CanDragTabs(!isElevated);
-        _tabView.TabDragStarting({ get_weak(), &TerminalPage::_TabDragStarted });
-        _tabView.TabDragCompleted({ get_weak(), &TerminalPage::_TabDragCompleted });
-
-        auto tabRowImpl = winrt::get_self<implementation::TabRowControl>(_tabRow);
-        _newTabButton = tabRowImpl->NewTabButton();
-
-        if (_settings.GlobalSettings().ShowTabsInTitlebar())
-        {
-            // Remove the TabView from the page. We'll hang on to it, we need to
-            // put it in the titlebar.
-            uint32_t index = 0;
-            if (this->Root().Children().IndexOf(_tabRow, index))
-            {
-                this->Root().Children().RemoveAt(index);
-            }
-
-            // Inform the host that our titlebar content has changed.
-            _SetTitleBarContentHandlers(*this, _tabRow);
-
-            // GH#13143 Manually set the tab row's background to transparent here.
-            //
-            // We're doing it this way because ThemeResources are tricky. We
-            // default in XAML to using the appropriate ThemeResource background
-            // color for our TabRow. When tabs in the titlebar are _disabled_,
-            // this will ensure that the tab row has the correct theme-dependent
-            // value. When tabs in the titlebar are _enabled_ (the default),
-            // we'll switch the BG to Transparent, to let the Titlebar Control's
-            // background be used as the BG for the tab row.
-            //
-            // We can't do it the other way around (default to Transparent, only
-            // switch to a color when disabling tabs in the titlebar), because
-            // looking up the correct ThemeResource from and App dictionary is a
-            // capital-H Hard problem.
-            const auto transparent = Media::SolidColorBrush();
-            transparent.Color(Windows::UI::Colors::Transparent());
-            _tabRow.Background(transparent);
-        }
         _updateThemeColors();
-
-        // Initialize the state of the CloseButtonOverlayMode property of
-        // our TabView, to match the tab.showCloseButton property in the theme.
-        if (const auto theme = _settings.GlobalSettings().CurrentTheme())
-        {
-            const auto visibility = theme.Tab() ? theme.Tab().ShowCloseButton() : Settings::Model::TabCloseButtonVisibility::Always;
-
-            switch (visibility)
-            {
-            case Settings::Model::TabCloseButtonVisibility::Never:
-                _tabView.CloseButtonOverlayMode(MUX::Controls::TabViewCloseButtonOverlayMode::Auto);
-                break;
-            case Settings::Model::TabCloseButtonVisibility::Hover:
-                _tabView.CloseButtonOverlayMode(MUX::Controls::TabViewCloseButtonOverlayMode::OnPointerOver);
-                break;
-            default:
-                _tabView.CloseButtonOverlayMode(MUX::Controls::TabViewCloseButtonOverlayMode::Always);
-                break;
-            }
-        }
 
         // Hookup our event handlers to the ShortcutActionDispatch
         _RegisterActionCallbacks();
@@ -252,52 +186,14 @@ namespace winrt::TerminalApp::implementation
         // Hook up inbound connection event handler
         ConptyConnection::NewConnection({ this, &TerminalPage::_OnNewConnection });
 
-        //Event Bindings (Early)
-        _newTabButton.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_OpenNewTerminalViaDropdown(NewTerminalArgs());
-            }
-        });
-        _newTabButton.Drop([weakThis{ get_weak() }](const Windows::Foundation::IInspectable&, winrt::Windows::UI::Xaml::DragEventArgs e) {
-            if (auto page{ weakThis.get() })
-            {
-                page->NewTerminalByDrop(e);
-            }
-        });
-        _tabView.SelectionChanged({ this, &TerminalPage::_OnTabSelectionChanged });
-        _tabView.TabCloseRequested({ this, &TerminalPage::_OnTabCloseRequested });
-        _tabView.TabItemsChanged({ this, &TerminalPage::_OnTabItemsChanged });
-
         _CreateNewTabFlyout();
 
         _UpdateTabWidthMode();
-
-        // When the visibility of the command palette changes to "collapsed",
-        // the palette has been closed. Toss focus back to the currently active
-        // control.
-        CommandPalette().RegisterPropertyChangedCallback(UIElement::VisibilityProperty(), [this](auto&&, auto&&) {
-            if (CommandPalette().Visibility() == Visibility::Collapsed)
-            {
-                _FocusActiveControl(nullptr, nullptr);
-            }
-        });
-        CommandPalette().DispatchCommandRequested({ this, &TerminalPage::_OnDispatchCommandRequested });
-        CommandPalette().CommandLineExecutionRequested({ this, &TerminalPage::_OnCommandLineExecutionRequested });
-        CommandPalette().SwitchToTabRequested({ this, &TerminalPage::_OnSwitchToTabRequested });
-        CommandPalette().PreviewAction({ this, &TerminalPage::_PreviewActionHandler });
 
         // Settings AllowDependentAnimations will affect whether animations are
         // enabled application-wide, so we don't need to check it each time we
         // want to create an animation.
         WUX::Media::Animation::Timeline::AllowDependentAnimations(!_settings.GlobalSettings().DisableAnimations());
-
-        // Once the page is actually laid out on the screen, trigger all our
-        // startup actions. Things like Panes need to know at least how big the
-        // window will be, so they can subdivide that space.
-        //
-        // _OnFirstLayout will remove this handler so it doesn't get called more than once.
-        _layoutUpdatedRevoker = _tabContent.LayoutUpdated(winrt::auto_revoke, { this, &TerminalPage::_OnFirstLayout });
 
         _isAlwaysOnTop = _settings.GlobalSettings().AlwaysOnTop();
 
@@ -307,8 +203,6 @@ namespace winrt::TerminalApp::implementation
 
         // Setup mouse vanish attributes
         SystemParametersInfoW(SPI_GETMOUSEVANISH, 0, &_shouldMouseVanish, false);
-
-        _tabRow.ShowElevationShield(IsElevated() && _settings.GlobalSettings().ShowAdminShield());
 
         // Store cursor, so we can restore it, e.g., after mouse vanishing
         // (we'll need to adapt this logic once we make cursor context aware)
@@ -976,19 +870,6 @@ namespace winrt::TerminalApp::implementation
             aboutFlyout.Click({ this, &TerminalPage::_AboutButtonOnClick });
             newTabFlyout.Items().Append(aboutFlyout);
         }
-
-        // Before opening the fly-out set focus on the current tab
-        // so no matter how fly-out is closed later on the focus will return to some tab.
-        // We cannot do it on closing because if the window loses focus (alt+tab)
-        // the closing event is not fired.
-        // It is important to set the focus on the tab
-        // Since the previous focus location might be discarded in the background,
-        // e.g., the command palette will be dismissed by the menu,
-        // and then closing the fly-out will move the focus to wrong location.
-        newTabFlyout.Opening([this](auto&&, auto&&) {
-            _FocusCurrentTab(true);
-        });
-        _newTabButton.Flyout(newTabFlyout);
     }
 
     // Function Description:
@@ -1229,8 +1110,6 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_CommandPaletteButtonOnClick(const IInspectable&,
                                                     const RoutedEventArgs&)
     {
-        CommandPalette().EnableCommandPaletteMode(CommandPaletteLaunchMode::Action);
-        CommandPalette().Visibility(Visibility::Visible);
     }
 
     // Method Description:
@@ -1315,11 +1194,6 @@ namespace winrt::TerminalApp::implementation
         if (!_actionDispatch->DoAction(cmd.ActionAndArgs()))
         {
             return;
-        }
-
-        if (const auto p = CommandPalette(); p.Visibility() == Visibility::Visible && cmd.ActionAndArgs().Action() != ShortcutAction::ToggleCommandPalette)
-        {
-            p.Visibility(Visibility::Collapsed);
         }
 
         // Let's assume the user has bound the dead key "^" to a sendInput command that sends "b".
@@ -2001,21 +1875,6 @@ namespace winrt::TerminalApp::implementation
     // - the title of the focused control if there is one, else "Terminal"
     hstring TerminalPage::Title()
     {
-        if (_settings.GlobalSettings().ShowTitleInTitlebar())
-        {
-            auto selectedIndex = _tabView.SelectedIndex();
-            if (selectedIndex >= 0)
-            {
-                try
-                {
-                    if (auto focusedControl{ _GetActiveControl() })
-                    {
-                        return focusedControl.Title();
-                    }
-                }
-                CATCH_LOG();
-            }
-        }
         return { L"Terminal" };
     }
 
@@ -2228,10 +2087,6 @@ namespace winrt::TerminalApp::implementation
 
                 // We have to initialize the dialog here to be able to change the text of the text block within it
                 FindName(L"MultiLinePasteDialog").try_as<WUX::Controls::ContentDialog>();
-                ClipboardText().Text(text);
-
-                // The vertical offset on the scrollbar does not reset automatically, so reset it manually
-                ClipboardContentScrollViewer().ScrollToVerticalOffset(0);
 
                 auto warningResult = ContentDialogResult::Primary;
                 if (warnMultiLine)
@@ -2242,9 +2097,6 @@ namespace winrt::TerminalApp::implementation
                 {
                     warningResult = co_await _ShowLargePasteWarningDialog();
                 }
-
-                // Clear the clipboard text so it doesn't lie around in memory
-                ClipboardText().Text(L"");
 
                 if (warningResult != ContentDialogResult::Primary)
                 {
@@ -2290,10 +2142,6 @@ namespace winrt::TerminalApp::implementation
         {
             // FindName needs to be called first to actually load the xaml object
             auto unopenedUriDialog = FindName(L"CouldNotOpenUriDialog").try_as<WUX::Controls::ContentDialog>();
-
-            // Insert the reason and the URI
-            CouldNotOpenUriReason().Text(reason);
-            UnopenedUri().Text(uri);
 
             // Show the dialog
             presenter.ShowDialog(unopenedUriDialog);
@@ -2364,17 +2212,12 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    void TerminalPage::_ShowControlNoticeDialog(const winrt::hstring& title, const winrt::hstring& message)
+    void TerminalPage::_ShowControlNoticeDialog(const winrt::hstring&, const winrt::hstring&)
     {
         if (auto presenter{ _dialogPresenter.get() })
         {
             // FindName needs to be called first to actually load the xaml object
             auto controlNoticeDialog = FindName(L"ControlNoticeDialog").try_as<WUX::Controls::ContentDialog>();
-
-            ControlNoticeDialog().Title(winrt::box_value(title));
-
-            // Insert the message
-            NoticeMessage().Text(message);
 
             // Show the dialog
             presenter.ShowDialog(controlNoticeDialog);
@@ -2613,49 +2456,8 @@ namespace winrt::TerminalApp::implementation
     // - newAppearance
     // Return Value:
     // - <none>
-    void TerminalPage::_SetBackgroundImage(const winrt::Microsoft::Terminal::Settings::Model::IAppearanceConfig& newAppearance)
+    void TerminalPage::_SetBackgroundImage(const winrt::Microsoft::Terminal::Settings::Model::IAppearanceConfig&)
     {
-        const auto path = newAppearance.ExpandedBackgroundImagePath();
-        if (path.empty())
-        {
-            _tabContent.Background(nullptr);
-            return;
-        }
-
-        Windows::Foundation::Uri imageUri{ nullptr };
-        try
-        {
-            imageUri = Windows::Foundation::Uri{ path };
-        }
-        catch (...)
-        {
-            LOG_CAUGHT_EXCEPTION();
-            _tabContent.Background(nullptr);
-            return;
-        }
-        // Check if the image brush is already pointing to the image
-        // in the modified settings; if it isn't (or isn't there),
-        // set a new image source for the brush
-
-        auto brush = _tabContent.Background().try_as<Media::ImageBrush>();
-        Media::Imaging::BitmapImage imageSource = brush == nullptr ? nullptr : brush.ImageSource().try_as<Media::Imaging::BitmapImage>();
-
-        if (imageSource == nullptr ||
-            imageSource.UriSource() == nullptr ||
-            !imageSource.UriSource().Equals(imageUri))
-        {
-            Media::ImageBrush b{};
-            // Note that BitmapImage handles the image load asynchronously,
-            // which is especially important since the image
-            // may well be both large and somewhere out on the
-            // internet.
-            Media::Imaging::BitmapImage image(imageUri);
-            b.ImageSource(image);
-            _tabContent.Background(b);
-
-            b.Stretch(newAppearance.BackgroundImageStretchMode());
-            b.Opacity(newAppearance.BackgroundImageOpacity());
-        }
     }
 
     // Method Description:
@@ -2760,8 +2562,6 @@ namespace winrt::TerminalApp::implementation
         // enabled application-wide, so we don't need to check it each time we
         // want to create an animation.
         WUX::Media::Animation::Timeline::AllowDependentAnimations(!_settings.GlobalSettings().DisableAnimations());
-
-        _tabRow.ShowElevationShield(IsElevated() && _settings.GlobalSettings().ShowAdminShield());
 
         Media::SolidColorBrush transparent{ Windows::UI::Colors::Transparent() };
         _tabView.Background(transparent);
@@ -2879,8 +2679,6 @@ namespace winrt::TerminalApp::implementation
         {
             commandsCollection.Append(nameAndCommand.Value());
         }
-
-        CommandPalette().SetCommands(commandsCollection);
     }
 
     // Method Description:
@@ -3110,34 +2908,6 @@ namespace winrt::TerminalApp::implementation
             hoverColor = ColorHelper::Lighten(accentColor, hoverColorAdjustment);
             pressedColor = ColorHelper::Lighten(accentColor, pressedColorAdjustment);
         }
-
-        Media::SolidColorBrush backgroundBrush{ accentColor };
-        Media::SolidColorBrush backgroundHoverBrush{ hoverColor };
-        Media::SolidColorBrush backgroundPressedBrush{ pressedColor };
-        Media::SolidColorBrush foregroundBrush{ foregroundColor };
-
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonBackground"), backgroundBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonBackgroundPointerOver"), backgroundHoverBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonBackgroundPressed"), backgroundPressedBrush);
-
-        // Load bearing: The SplitButton uses SplitButtonForegroundSecondary for
-        // the secondary button, but {TemplateBinding Foreground} for the
-        // primary button.
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonForeground"), foregroundBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonForegroundPointerOver"), foregroundBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonForegroundPressed"), foregroundBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonForegroundSecondary"), foregroundBrush);
-        _newTabButton.Resources().Insert(winrt::box_value(L"SplitButtonForegroundSecondaryPressed"), foregroundBrush);
-
-        _newTabButton.Background(backgroundBrush);
-        _newTabButton.Foreground(foregroundBrush);
-
-        // This is just like what we do in TabBase::_RefreshVisualState. We need
-        // to manually toggle the visual state, so the setters in the visual
-        // state group will re-apply, and set our currently selected colors in
-        // the resources.
-        VisualStateManager::GoToState(_newTabButton, L"FlyoutOpen", true);
-        VisualStateManager::GoToState(_newTabButton, L"Normal", true);
     }
 
     // Method Description:
@@ -3688,7 +3458,6 @@ namespace winrt::TerminalApp::implementation
                     tip.Closed({ page->get_weak(), &TerminalPage::_FocusActiveControl });
                 }
             }
-            _UpdateTeachingTipTheme(WindowIdToast().try_as<winrt::Windows::UI::Xaml::FrameworkElement>());
 
             if (page->_windowIdToast != nullptr)
             {
@@ -3823,7 +3592,6 @@ namespace winrt::TerminalApp::implementation
                     tip.Closed({ page->get_weak(), &TerminalPage::_FocusActiveControl });
                 }
             }
-            _UpdateTeachingTipTheme(RenameFailedToast().try_as<winrt::Windows::UI::Xaml::FrameworkElement>());
 
             if (page->_windowRenameFailedToast != nullptr)
             {
@@ -3845,27 +3613,10 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_WindowRenamerActionClick(const IInspectable& /*sender*/,
                                                  const IInspectable& /*eventArgs*/)
     {
-        auto newName = WindowRenamerTextBox().Text();
-        _RequestWindowRename(newName);
     }
 
-    void TerminalPage::_RequestWindowRename(const winrt::hstring& newName)
+    void TerminalPage::_RequestWindowRename(const winrt::hstring&)
     {
-        auto request = winrt::make<implementation::RenameWindowRequestedArgs>(newName);
-        // The WindowRenamer is _not_ a Toast - we want it to stay open until
-        // the user dismisses it.
-        if (WindowRenamer())
-        {
-            WindowRenamer().IsOpen(false);
-        }
-        _RenameWindowRequestedHandlers(*this, request);
-        // We can't just use request.Successful here, because the handler might
-        // (will) be handling this asynchronously, so when control returns to
-        // us, this hasn't actually been handled yet. We'll get called back in
-        // RenameFailed if this fails.
-        //
-        // Theoretically we could do a IAsyncOperation<RenameWindowResult> kind
-        // of thing with co_return winrt::make<RenameWindowResult>(false).
     }
 
     // Method Description:
@@ -3906,10 +3657,6 @@ namespace winrt::TerminalApp::implementation
         }
         else if (key == Windows::System::VirtualKey::Escape)
         {
-            // User wants to discard the changes they made
-            WindowRenamerTextBox().Text(WindowName());
-            WindowRenamer().IsOpen(false);
-            _renamerPressedEnter = false;
         }
     }
 

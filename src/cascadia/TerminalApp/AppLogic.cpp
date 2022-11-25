@@ -884,12 +884,8 @@ namespace winrt::TerminalApp::implementation
         //    we should display the loading error.
         //    * We can't display the error now, because we might not have a
         //      UI yet. We'll display the error in _OnLoaded.
-        _settingsLoadedResult = _TryLoadSettings();
-
-        if (FAILED(_settingsLoadedResult))
-        {
-            _settings = CascadiaSettings::LoadDefaults();
-        }
+        _settings = CascadiaSettings::LoadDefaults();
+        _settingsLoadedResult = S_OK;
 
         _loadedInitialSettings = true;
 
