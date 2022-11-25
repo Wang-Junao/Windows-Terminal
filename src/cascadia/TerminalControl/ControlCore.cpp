@@ -106,15 +106,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _settings = winrt::make_self<implementation::ControlSettings>(settings, unfocusedAppearance);
 
         _terminal = std::make_shared<::Microsoft::Terminal::Core::Terminal>();
-
-        // Subscribe to the connection's disconnected event and call our connection closed handlers.
-        _connectionStateChangedRevoker = _connection.StateChanged(winrt::auto_revoke, [this](auto&& /*s*/, auto&& /*v*/) {
-            _ConnectionStateChangedHandlers(*this, nullptr);
-        });
-
-        // This event is explicitly revoked in the destructor: does not need weak_ref
-        _connectionOutputEventToken = _connection.TerminalOutput({ this, &ControlCore::_connectionOutputHandler });
-
+        
         _terminal->SetWriteInputCallback([this](std::wstring_view wstr) {
             _sendInputToConnection(wstr);
         });
@@ -272,17 +264,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 return false;
             }
 
-            if (_settings->UseAtlasEngine())
-            {
-                _renderEngine = std::make_unique<::Microsoft::Console::Render::AtlasEngine>();
-            }
-            else
-            {
-                _renderEngine = std::make_unique<::Microsoft::Console::Render::DxEngine>();
-            }
-
-            _renderer->AddRenderEngine(_renderEngine.get());
-
             // Initialize our font with the renderer
             // We don't have to care about DPI. We'll get a change message immediately if it's not 96
             // and react accordingly.
@@ -295,59 +276,20 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // Then, using the font, get the number of characters that can fit.
             // Resize our terminal connection to match that size, and initialize the terminal with that size.
             const auto viewInPixels = Viewport::FromDimensions({ 0, 0 }, windowSize);
-            LOG_IF_FAILED(_renderEngine->SetWindowSize({ viewInPixels.Width(), viewInPixels.Height() }));
 
-            // Update DxEngine's SelectionBackground
-            _renderEngine->SetSelectionBackground(til::color{ _settings->SelectionBackground() });
-
-            const auto vp = _renderEngine->GetViewportInCharacters(viewInPixels);
-            const auto width = vp.Width();
-            const auto height = vp.Height();
-            _connection.Resize(height, width);
-
-            if (_owningHwnd != 0)
-            {
-                if (auto conpty{ _connection.try_as<TerminalConnection::ConptyConnection>() })
-                {
-                    conpty.ReparentWindow(_owningHwnd);
-                }
-            }
-
+            const auto width = 120;
+            const auto height = 30;
+            
             // Override the default width and height to match the size of the swapChainPanel
             _settings->InitialCols(width);
             _settings->InitialRows(height);
 
             _terminal->CreateFromSettings(*_settings, *_renderer);
 
-            // IMPORTANT! Set this callback up sooner than later. If we do it
-            // after Enable, then it'll be possible to paint the frame once
-            // _before_ the warning handler is set up, and then warnings from
-            // the first paint will be ignored!
-            _renderEngine->SetWarningCallback(std::bind(&ControlCore::_rendererWarning, this, std::placeholders::_1));
-
-            // Tell the DX Engine to notify us when the swap chain changes.
-            // We do this after we initially set the swapchain so as to avoid unnecessary callbacks (and locking problems)
-            _renderEngine->SetCallback([this](auto handle) { _renderEngineSwapChainChanged(handle); });
-
-            _renderEngine->SetRetroTerminalEffect(_settings->RetroTerminalEffect());
-            _renderEngine->SetPixelShaderPath(_settings->PixelShaderPath());
-            _renderEngine->SetForceFullRepaintRendering(_settings->ForceFullRepaintRendering());
-            _renderEngine->SetSoftwareRendering(_settings->SoftwareRendering());
-
             _updateAntiAliasingMode();
-
-            // GH#5098: Inform the engine of the opacity of the default text background.
-            // GH#11315: Always do this, even if they don't have acrylic on.
-            _renderEngine->EnableTransparentBackground(_isBackgroundTransparent());
-
-            THROW_IF_FAILED(_renderEngine->Enable());
 
             _initializedTerminal = true;
         } // scope for TerminalLock
-
-        // Start the connection outside of lock, because it could
-        // start writing output immediately.
-        _connection.Start();
 
         return true;
     }
@@ -362,10 +304,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - <none>
     void ControlCore::EnablePainting()
     {
-        if (_initializedTerminal)
-        {
-            _renderer->EnablePainting();
-        }
     }
 
     // Method Description:
@@ -375,7 +313,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - wstr: the string of characters to write to the terminal connection.
     // Return Value:
     // - <none>
-    void ControlCore::_sendInputToConnection(std::wstring_view wstr)
+    void ControlCore::_sendInputToConnection(std::wstring_view)
     {
         if (_isReadOnly)
         {
@@ -383,7 +321,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else
         {
-            _connection.WriteInput(wstr);
         }
     }
 
@@ -611,38 +548,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         // is what the Terminal did prior to 1.12.
         _runtimeUseAcrylic = newOpacity < 1.0 && (!IsVintageOpacityAvailable() || _settings->UseAcrylic());
 
-        // Update the renderer as well. It might need to fall back from
-        // cleartype -> grayscale if the BG is transparent / acrylic.
-        if (_renderEngine)
-        {
-            _renderEngine->EnableTransparentBackground(_isBackgroundTransparent());
-            _renderer->NotifyPaintFrame();
-        }
-
         auto eventArgs = winrt::make_self<TransparencyChangedEventArgs>(newOpacity);
         _TransparencyChangedHandlers(*this, *eventArgs);
     }
 
     void ControlCore::ToggleShaderEffects()
     {
-        const auto path = _settings->PixelShaderPath();
-        auto lock = _terminal->LockForWriting();
-        // Originally, this action could be used to enable the retro effects
-        // even when they're set to `false` in the settings. If the user didn't
-        // specify a custom pixel shader, manually enable the legacy retro
-        // effect first. This will ensure that a toggle off->on will still work,
-        // even if they currently have retro effect off.
-        if (path.empty())
-        {
-            _renderEngine->SetRetroTerminalEffect(!_renderEngine->GetRetroTerminalEffect());
-        }
-        else
-        {
-            _renderEngine->SetPixelShaderPath(_renderEngine->GetPixelShaderPath().empty() ? std::wstring_view{ path } : std::wstring_view{});
-        }
-        // Always redraw after toggling effects. This way even if the control
-        // does not have focus it will update immediately.
-        _renderer->TriggerRedrawAll();
     }
 
     // Method description:
@@ -693,9 +604,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
                 _lastHoveredId = newId;
                 _lastHoveredInterval = newInterval;
-                _renderEngine->UpdateHyperlinkHoveredId(newId);
-                _renderer->UpdateLastHoveredInterval(newInterval);
-                _renderer->TriggerRedrawAll();
             }
 
             _HoveredHyperlinkChangedHandlers(*this, nullptr);
@@ -754,14 +662,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             return;
         }
 
-        _renderEngine->SetForceFullRepaintRendering(_settings->ForceFullRepaintRendering());
-        _renderEngine->SetSoftwareRendering(_settings->SoftwareRendering());
-        // Inform the renderer of our opacity
-        _renderEngine->EnableTransparentBackground(_isBackgroundTransparent());
-
-        // Trigger a redraw to repaint the window background and tab colors.
-        _renderer->TriggerRedrawAll(true, true);
-
         _updateAntiAliasingMode();
 
         if (sizeChanged)
@@ -779,16 +679,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         const auto& newAppearance{ focused ? _settings->FocusedAppearance() : _settings->UnfocusedAppearance() };
         // Update the terminal core with its new Core settings
         _terminal->UpdateAppearance(*newAppearance);
-
-        // Update DxEngine settings under the lock
-        if (_renderEngine)
-        {
-            // Update DxEngine settings under the lock
-            _renderEngine->SetSelectionBackground(til::color{ newAppearance->SelectionBackground() });
-            _renderEngine->SetRetroTerminalEffect(newAppearance->RetroTerminalEffect());
-            _renderEngine->SetPixelShaderPath(newAppearance->PixelShaderPath());
-            _renderer->TriggerRedrawAll();
-        }
     }
 
     void ControlCore::_updateAntiAliasingMode()
@@ -807,8 +697,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             mode = D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE;
             break;
         }
-
-        _renderEngine->SetAntialiasingMode(mode);
     }
 
     // Method Description:
@@ -823,39 +711,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //   concerned with initialization process. Value forwarded to event handler.
     void ControlCore::_updateFont(const bool initialUpdate)
     {
-        const auto newDpi = static_cast<int>(static_cast<double>(USER_DEFAULT_SCREEN_DPI) *
-                                             _compositionScale);
-
         _terminal->SetFontInfo(_actualFont);
-
-        if (_renderEngine)
-        {
-            std::unordered_map<std::wstring_view, uint32_t> featureMap;
-            if (const auto fontFeatures = _settings->FontFeatures())
-            {
-                featureMap.reserve(fontFeatures.Size());
-
-                for (const auto& [tag, param] : fontFeatures)
-                {
-                    featureMap.emplace(tag, param);
-                }
-            }
-            std::unordered_map<std::wstring_view, float> axesMap;
-            if (const auto fontAxes = _settings->FontAxes())
-            {
-                axesMap.reserve(fontAxes.Size());
-
-                for (const auto& [axis, value] : fontAxes)
-                {
-                    axesMap.emplace(axis, value);
-                }
-            }
-
-            // TODO: MSFT:20895307 If the font doesn't exist, this doesn't
-            //      actually fail. We need a way to gracefully fallback.
-            LOG_IF_FAILED(_renderEngine->UpdateDpi(newDpi));
-            LOG_IF_FAILED(_renderEngine->UpdateFont(_desiredFont, _actualFont, featureMap, axesMap));
-        }
 
         // If the actual font isn't what was requested...
         if (_actualFont.GetFaceName() != _desiredFont.GetFaceName())
@@ -953,23 +809,15 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         // Convert our new dimensions to characters
         const auto viewInPixels = Viewport::FromDimensions({ 0, 0 }, { cx, cy });
-        const auto vp = _renderEngine->GetViewportInCharacters(viewInPixels);
         const auto currentVP = _terminal->GetViewport();
 
         _terminal->ClearSelection();
 
-        // Tell the dx engine that our window is now the new size.
-        THROW_IF_FAILED(_renderEngine->SetWindowSize({ cx, cy }));
-
-        // Invalidate everything
-        _renderer->TriggerRedrawAll();
-
         // If this function succeeds with S_FALSE, then the terminal didn't
         // actually change size. No need to notify the connection of this no-op.
-        const auto hr = _terminal->UserResize({ vp.Width(), vp.Height() });
+        const auto hr = _terminal->UserResize({ 120, 30 });
         if (SUCCEEDED(hr) && hr != S_FALSE)
         {
-            _connection.Resize(vp.Height(), vp.Width());
         }
     }
 
@@ -990,26 +838,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _refreshSizeUnderLock();
     }
 
-    void ControlCore::ScaleChanged(const double scale)
+    void ControlCore::ScaleChanged(const double)
     {
-        if (!_renderEngine)
-        {
-            return;
-        }
-
-        // _refreshSizeUnderLock redraws the entire terminal.
-        // Don't call it if we don't have to.
-        if (_compositionScale == scale)
-        {
-            return;
-        }
-
-        _compositionScale = scale;
-
-        auto lock = _terminal->LockForWriting();
-        // _updateFont relies on the new _compositionScale set above
-        _updateFont();
-        _refreshSizeUnderLock();
     }
 
     void ControlCore::SetSelectionAnchor(const til::point position)
@@ -1151,7 +981,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         if (_terminal->IsSelectionActive())
         {
             _terminal->SetBlockSelection(!_terminal->IsBlockSelection());
-            _renderer->TriggerSelection();
             // do not update the selection markers!
             // if we were showing them, keep it that way.
             // otherwise, continue to not show them
@@ -1243,7 +1072,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     TerminalConnection::ConnectionState ControlCore::ConnectionState() const
     {
-        return _connection ? _connection.State() : TerminalConnection::ConnectionState::Closed;
+        return TerminalConnection::ConnectionState::Closed;
     }
 
     hstring ControlCore::Title()
@@ -1485,7 +1314,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // this is used for search,
             // DO NOT call _updateSelectionUI() here.
             // We don't want to show the markers so manually tell it to clear it.
-            _renderer->TriggerSelection();
             _UpdateSelectionMarkersHandlers(*this, winrt::make<implementation::UpdateSelectionMarkersEventArgs>(true));
         }
 
@@ -1505,9 +1333,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             _midiAudio.BeginSkip();
 
             // Stop accepting new output and state changes before we disconnect everything.
-            _connection.TerminalOutput(_connectionOutputEventToken);
             _connectionStateChangedRevoker.revoke();
-            _connection.Close();
         }
     }
 
@@ -1562,7 +1388,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     void ControlCore::ResumeRendering()
     {
-        _renderer->ResetErrorStateAndResume();
     }
 
     bool ControlCore::IsVtMouseModeEnabled() const
@@ -1654,16 +1479,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - Updates the renderer's representation of the selection as well as the selection marker overlay in TermControl
     void ControlCore::_updateSelectionUI()
     {
-        _renderer->TriggerSelection();
         // only show the markers if we're doing a keyboard selection or in mark mode
         const bool showMarkers{ _terminal->SelectionMode() >= ::Microsoft::Terminal::Core::Terminal::SelectionInteractionMode::Keyboard };
         _UpdateSelectionMarkersHandlers(*this, winrt::make<implementation::UpdateSelectionMarkersEventArgs>(!showMarkers));
     }
 
-    void ControlCore::AttachUiaEngine(::Microsoft::Console::Render::IRenderEngine* const pEngine)
+    void ControlCore::AttachUiaEngine(::Microsoft::Console::Render::IRenderEngine* const)
     {
-        // _renderer will always exist since it's introduced in the ctor
-        _renderer->AddRenderEngine(pEngine);
     }
 
     bool ControlCore::IsInReadOnlyMode() const
@@ -1718,13 +1540,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         if (clearType == Control::ClearBufferType::Screen || clearType == Control::ClearBufferType::All)
         {
-            // Send a signal to conpty to clear the buffer.
-            if (auto conpty{ _connection.try_as<TerminalConnection::ConptyConnection>() })
-            {
-                // ConPTY will emit sequences to sync up our buffer with its new
-                // contents.
-                conpty.ClearBuffer();
-            }
         }
     }
 
@@ -1868,10 +1683,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _settings->FocusedAppearance()->SetColorTableEntry(15, scheme.BrightWhite);
 
         _terminal->ApplyScheme(scheme);
-
-        _renderEngine->SetSelectionBackground(til::color{ _settings->SelectionBackground() });
-
-        _renderer->TriggerRedrawAll(true);
     }
 
     bool ControlCore::HasUnfocusedAppearance() const
@@ -1901,15 +1712,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - visible: True for visible; false for not visible.
     // Return Value:
     // - <none>
-    void ControlCore::WindowVisibilityChanged(const bool showOrHide)
+    void ControlCore::WindowVisibilityChanged(const bool)
     {
         if (_initializedTerminal)
         {
-            // show is true, hide is false
-            if (auto conpty{ _connection.try_as<TerminalConnection::ConptyConnection>() })
-            {
-                conpty.ShowHide(showOrHide);
-            }
         }
     }
 
@@ -2146,10 +1952,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             _terminal->ClearSelection();
             if (matchMode != Core::MatchMode::None)
             {
-                // ClearSelection will invalidate the selection area... but if we are
-                // coloring other matches, then we need to make sure those get redrawn,
-                // too.
-                _renderer->TriggerRedrawAll();
             }
         }
     }

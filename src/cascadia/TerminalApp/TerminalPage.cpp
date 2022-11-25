@@ -2559,49 +2559,10 @@ namespace winrt::TerminalApp::implementation
             return nullptr;
         }
 
-        auto connection = existingConnection ? existingConnection : _CreateConnectionFromSettings(profile, controlSettings.DefaultSettings());
-        if (existingConnection)
-        {
-            connection.Resize(controlSettings.DefaultSettings().InitialRows(), controlSettings.DefaultSettings().InitialCols());
-        }
-
-        TerminalConnection::ITerminalConnection debugConnection{ nullptr };
-        if (_settings.GlobalSettings().DebugFeaturesEnabled())
-        {
-            const auto window = CoreWindow::GetForCurrentThread();
-            const auto rAltState = window.GetKeyState(VirtualKey::RightMenu);
-            const auto lAltState = window.GetKeyState(VirtualKey::LeftMenu);
-            const auto bothAltsPressed = WI_IsFlagSet(lAltState, CoreVirtualKeyStates::Down) &&
-                                         WI_IsFlagSet(rAltState, CoreVirtualKeyStates::Down);
-            if (bothAltsPressed)
-            {
-                std::tie(connection, debugConnection) = OpenDebugTapConnection(connection);
-            }
-        }
-
-        const auto control = _InitControl(controlSettings, connection);
+        const auto control = _InitControl(controlSettings, nullptr);
         _RegisterTerminalEvents(control);
 
         auto resultPane = std::make_shared<Pane>(profile, control);
-
-        if (debugConnection) // this will only be set if global debugging is on and tap is active
-        {
-            auto newControl = _InitControl(controlSettings, debugConnection);
-            _RegisterTerminalEvents(newControl);
-            // Split (auto) with the debug tap.
-            auto debugPane = std::make_shared<Pane>(profile, newControl);
-
-            // Since we're doing this split directly on the pane (instead of going through TerminalTab,
-            // we need to handle the panes 'active' states
-
-            // Set the pane we're splitting to active (otherwise Split will not do anything)
-            resultPane->SetActive();
-            auto [original, _] = resultPane->Split(SplitDirection::Automatic, 0.5f, debugPane);
-
-            // Set the non-debug pane as active
-            resultPane->ClearActive();
-            original->SetActive();
-        }
 
         return resultPane;
     }
