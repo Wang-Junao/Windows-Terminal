@@ -1902,6 +1902,14 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
                                                      ppsiNewScreenBuffer);
     if (NT_SUCCESS(Status))
     {
+        std::ignore = SCREEN_INFORMATION::CreateInstance(WindowSize,
+                                                         existingFont,
+                                                         WindowSize,
+                                                         initAttributes,
+                                                         GetPopupAttributes(),
+                                                         Cursor::CURSOR_SMALL_SIZE,
+                                                         &(*ppsiNewScreenBuffer)->_oldBuffer);
+
         // Update the alt buffer's cursor style, visibility, and position to match our own.
         auto& myCursor = GetTextBuffer().GetCursor();
         auto* const createdBuffer = *ppsiNewScreenBuffer;

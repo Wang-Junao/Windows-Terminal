@@ -21,7 +21,14 @@
 
 #include "../interactivity/inc/ServiceLocator.hpp"
 
-#pragma hdrstop
+#define WRITE_CHARS_LEGACY_DIFF !NDEBUG
+
+#if WRITE_CHARS_LEGACY_DIFF
+#define WriteCharsLegacyDiff WriteCharsLegacy
+#else
+#define WriteCharsLegacyNew WriteCharsLegacy
+#endif
+
 using namespace Microsoft::Console::Types;
 using Microsoft::Console::Interactivity::ServiceLocator;
 using Microsoft::Console::VirtualTerminal::StateMachine;
@@ -302,6 +309,196 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
     return Status;
 }
 
+[[nodiscard]] NTSTATUS WriteCharsLegacyNew(SCREEN_INFORMATION& screenInfo,
+                                           _In_range_(<=, pwchBuffer) const wchar_t* const pwchBufferBackupLimit,
+                                           _In_ const wchar_t* pwchBuffer,
+                                           _In_reads_bytes_(*pcb) const wchar_t* pwchRealUnicode,
+                                           _Inout_ size_t* const pcb,
+                                           _Out_opt_ size_t* const pcSpaces,
+                                           const til::CoordType sOriginalXPosition,
+                                           const DWORD dwFlags,
+                                           _Inout_opt_ til::CoordType* const psScrollY)
+try
+{
+    static constexpr wchar_t tabSpaces[8]{ L' ', L' ', L' ', L' ', L' ', L' ', L' ', L' ' };
+
+    UNREFERENCED_PARAMETER(sOriginalXPosition);
+    UNREFERENCED_PARAMETER(pwchBuffer);
+    UNREFERENCED_PARAMETER(pwchBufferBackupLimit);
+
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& textBuffer = screenInfo.GetTextBuffer();
+    auto& cursor = textBuffer.GetCursor();
+    const auto textBufferSize = textBuffer.GetSize().Dimensions();
+    const auto Attributes = textBuffer.GetCurrentAttributes();
+    const auto bufferSize = *pcb / sizeof(wchar_t);
+    auto it = pwchRealUnicode;
+    const auto end = it + bufferSize;
+    til::point written;
+
+    auto cursorPos = cursor.GetPosition();
+    if (cursor.IsDelayedEOLWrap() && WI_IsFlagSet(screenInfo.OutputMode, ENABLE_WRAP_AT_EOL_OUTPUT))
+    {
+        const auto coordDelayedAt = cursor.GetDelayedAtPosition();
+        cursor.ResetDelayEOLWrap();
+        if (coordDelayedAt == cursorPos)
+        {
+            cursorPos.x = 0;
+            cursorPos.y++;
+        }
+    }
+
+    while (it != end)
+    {
+        const auto nextControlChar = std::find_if(it, end, [](const auto& wch) { return IS_CONTROL_CHAR(wch); });
+        if (nextControlChar != it)
+        {
+            written += textBuffer.Write(cursorPos, { it, nextControlChar }, Attributes);
+            it = nextControlChar;
+        }
+
+        for (; it != end && IS_CONTROL_CHAR(*it); ++it)
+        {
+            switch (*it)
+            {
+            case UNICODE_BELL:
+                if (WI_IsFlagClear(dwFlags, WC_PRINTABLE_CONTROL_CHARS))
+                {
+                    std::ignore = screenInfo.SendNotifyBeep();
+                    continue;
+                }
+                break;
+            case UNICODE_BACKSPACE:
+            {
+                const auto wrapsLineUp = cursorPos.x <= 0 && cursorPos.y > 0 && WI_IsFlagClear(dwFlags, WC_LIMIT_BACKSPACE);
+                if (wrapsLineUp)
+                {
+                    cursorPos.y--;
+                    cursorPos.x = textBufferSize.width;
+                }
+
+                auto& row = textBuffer.GetRowByOffset(cursorPos.y);
+                // TODO: In case of pwchBufferBackupLimit != pwchBuffer,
+                // we have to interpret the escape codes in pwchBufferBackupLimit.
+                // If it contains a \t for instance (which we previously interpreted as up to 8 spaces)
+                // then we now have to back off 8 spaces instead of just 1. Same for WC_PRINTABLE_CONTROL_CHARS.
+                cursorPos.x = row.PrecedingColumn(cursorPos.x);
+
+                if (WI_IsFlagSet(dwFlags, WC_DESTRUCTIVE_BACKSPACE))
+                {
+                    if (wrapsLineUp)
+                    {
+                        row.SetWrapForced(false);
+                    }
+
+                    auto pos = cursorPos;
+                    written -= textBuffer.Write(pos, { &tabSpaces[0], 1 }, Attributes);
+                }
+                continue;
+            }
+            case UNICODE_TAB:
+                // A tab at the end of a line turns into a newline
+                if (cursorPos.x >= textBufferSize.width)
+                {
+                    // TODO: SetWrapForced(true);
+                    cursorPos.x = 0;
+                    cursorPos.y++;
+                    if (cursorPos.y >= textBufferSize.height)
+                    {
+                        cursorPos.y = textBufferSize.height - 1;
+                        textBuffer.IncrementCircularBuffer();
+                    }
+                }
+                else
+                {
+                    const auto cols = std::min(NUMBER_OF_SPACES_IN_TAB(1), textBufferSize.width - cursorPos.x - 1);
+                    if (cols > 0)
+                    {
+                        written += textBuffer.Write(cursorPos, { &tabSpaces[0], gsl::narrow_cast<size_t>(cols) }, Attributes);
+                    }
+                }
+                continue;
+            case UNICODE_LINEFEED:
+                textBuffer.GetRowByOffset(cursorPos.y).SetWrapForced(false);
+                if (gci.IsReturnOnNewlineAutomatic())
+                {
+                    cursorPos.x = 0;
+                }
+                cursorPos.x = 0;
+                cursorPos.y++;
+                if (cursorPos.y >= textBufferSize.height)
+                {
+                    cursorPos.y = textBufferSize.height - 1;
+                    textBuffer.IncrementCircularBuffer();
+                }
+                continue;
+            case UNICODE_CARRIAGERETURN:
+                cursorPos.x = 0;
+                continue;
+            default:
+                break;
+            }
+
+            if (WI_IsFlagSet(dwFlags, WC_PRINTABLE_CONTROL_CHARS))
+            {
+                const wchar_t wchs[2]{ L'^', static_cast<wchar_t>(*it + L'@') };
+                written += textBuffer.Write(cursorPos, { &wchs[0], 2 }, Attributes);
+            }
+        }
+    }
+
+    if (pcSpaces)
+    {
+        *pcSpaces = written.x;
+    }
+
+    if (psScrollY)
+    {
+        *psScrollY = -written.y;
+    }
+
+    // Scroll the viewport, if the cursor moved past the bottom edge of the viewport.
+    if (const auto dy = cursorPos.y - screenInfo.GetViewport().BottomInclusive(); dy > 0)
+    {
+        LOG_IF_FAILED(screenInfo.SetViewportOrigin(false, { 0, dy }, true));
+
+        // TODO: Rewrite comment, there's no cursorMovedPastViewport/cursorMovedPastVirtualViewport
+        // MSFT:19989333 - Only re-initialize the cursor row if the cursor moved
+        //      below the terminal section of the buffer (the virtual viewport),
+        //      and the visible part of the buffer (the actual viewport).
+        // If this is only cursorMovedPastViewport, and you scroll up, then type
+        //      a character, we'll re-initialize the line the cursor is on.
+        // If this is only cursorMovedPastVirtualViewport and you scroll down,
+        //      (with terminal scrolling disabled) then all lines newly exposed
+        //      will get their attributes constantly cleared out.
+        // cursorMovedPastViewport && cursorMovedPastVirtualViewport works
+        if (
+            WI_IsFlagSet(screenInfo.OutputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+            cursorPos.y > screenInfo.GetVirtualViewport().BottomInclusive())
+        {
+            screenInfo.InitializeCursorRowAttributes();
+        }
+    }
+
+    if (cursorPos.x >= textBufferSize.width && WI_IsFlagSet(screenInfo.OutputMode, ENABLE_WRAP_AT_EOL_OUTPUT))
+    {
+        cursorPos.x = textBufferSize.width - 1;
+        cursor.DelayEOLWrap(cursorPos);
+    }
+
+    {
+        const auto keepCursorVisible = WI_IsFlagSet(dwFlags, WC_KEEP_CURSOR_VISIBLE);
+        if (keepCursorVisible)
+        {
+            screenInfo.MakeCursorVisible(cursorPos);
+        }
+        LOG_IF_FAILED(screenInfo.SetCursorPosition(cursorPos, keepCursorVisible));
+    }
+
+    return S_OK;
+}
+NT_CATCH_RETURN()
+
 // Routine Description:
 // - This routine writes a string to the screen, processing any embedded
 //   unicode characters.  The string is also copied to the input buffer, if
@@ -321,15 +518,15 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
 // Return Value:
 // Note:
 // - This routine does not process tabs and backspace properly.  That code will be implemented as part of the line editing services.
-[[nodiscard]] NTSTATUS WriteCharsLegacy(SCREEN_INFORMATION& screenInfo,
-                                        _In_range_(<=, pwchBuffer) const wchar_t* const pwchBufferBackupLimit,
-                                        _In_ const wchar_t* pwchBuffer,
-                                        _In_reads_bytes_(*pcb) const wchar_t* pwchRealUnicode,
-                                        _Inout_ size_t* const pcb,
-                                        _Out_opt_ size_t* const pcSpaces,
-                                        const til::CoordType sOriginalXPosition,
-                                        const DWORD dwFlags,
-                                        _Inout_opt_ til::CoordType* const psScrollY)
+[[nodiscard]] NTSTATUS WriteCharsLegacyOld(SCREEN_INFORMATION& screenInfo,
+                                           _In_range_(<=, pwchBuffer) const wchar_t* const pwchBufferBackupLimit,
+                                           _In_ const wchar_t* pwchBuffer,
+                                           _In_reads_bytes_(*pcb) const wchar_t* pwchRealUnicode,
+                                           _Inout_ size_t* const pcb,
+                                           _Out_opt_ size_t* const pcSpaces,
+                                           const til::CoordType sOriginalXPosition,
+                                           const DWORD dwFlags,
+                                           _Inout_opt_ til::CoordType* const psScrollY)
 {
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     auto& textBuffer = screenInfo.GetTextBuffer();
@@ -913,6 +1110,170 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
     }
 
     return STATUS_SUCCESS;
+}
+
+[[nodiscard]] NTSTATUS WriteCharsLegacyDiff(SCREEN_INFORMATION& screenInfo,
+                                        _In_range_(<=, pwchBuffer) const wchar_t* const pwchBufferBackupLimit,
+                                        _In_ const wchar_t* pwchBuffer,
+                                        _In_reads_bytes_(*pcb) const wchar_t* pwchRealUnicode,
+                                        _Inout_ size_t* const pcb,
+                                        _Out_opt_ size_t* const pcSpaces,
+                                        const til::CoordType sOriginalXPosition,
+                                        const DWORD dwFlags,
+                                        _Inout_opt_ til::CoordType* const psScrollY)
+{
+    auto& screenInfoOld = *screenInfo._oldBuffer;
+    auto& screenInfoNew = screenInfo;
+    auto& textBufferOld = *screenInfoOld._textBuffer;
+    auto& textBufferNew = *screenInfoNew._textBuffer;
+    auto& cursorOld = textBufferOld.GetCursor();
+    auto& cursorNew = textBufferNew.GetCursor();
+
+    screenInfoOld.OutputMode = screenInfoNew.OutputMode;
+
+    cursorOld._cPosition = cursorNew._cPosition;
+    cursorOld._fHasMoved = cursorNew._fHasMoved;
+    cursorOld._fIsVisible = cursorNew._fIsVisible;
+    cursorOld._fIsOn = cursorNew._fIsOn;
+    cursorOld._fIsDouble = cursorNew._fIsDouble;
+    cursorOld._fBlinkingAllowed = cursorNew._fBlinkingAllowed;
+    cursorOld._fDelay = cursorNew._fDelay;
+    cursorOld._fIsConversionArea = cursorNew._fIsConversionArea;
+    cursorOld._fIsPopupShown = cursorNew._fIsPopupShown;
+    cursorOld._fDelayedEolWrap = cursorNew._fDelayedEolWrap;
+    cursorOld._coordDelayedAt = cursorNew._coordDelayedAt;
+    cursorOld._fDeferCursorRedraw = cursorNew._fDeferCursorRedraw;
+    cursorOld._fHaveDeferredCursorRedraw = cursorNew._fHaveDeferredCursorRedraw;
+    cursorOld._ulSize = cursorNew._ulSize;
+    cursorOld._cursorType = cursorNew._cursorType;
+
+    auto pcbOld = *pcb;
+    size_t pcSpacesOld = 0xCDCDCDCD;
+    til::CoordType psScrollYOld = psScrollY ? *psScrollY : 0;
+    const auto hrOld = WriteCharsLegacyOld(screenInfoOld, pwchBufferBackupLimit, pwchBuffer, pwchRealUnicode, &pcbOld, &pcSpacesOld, sOriginalXPosition, dwFlags, &psScrollYOld);
+
+    auto pcbNew = *pcb;
+    size_t pcSpacesNew = 0xDEDEDEDE;
+    til::CoordType psScrollYNew = psScrollY ? *psScrollY : 0;
+    const auto hrNew = WriteCharsLegacyNew(screenInfoNew, pwchBufferBackupLimit, pwchBuffer, pwchRealUnicode, &pcbNew, &pcSpacesNew, sOriginalXPosition, dwFlags, &psScrollYNew);
+
+    if (hrOld != hrNew)
+    {
+        __debugbreak();
+    }
+    if (pcbOld != pcbNew)
+    {
+        __debugbreak();
+    }
+    if (pcSpacesOld != pcSpacesNew)
+    {
+        __debugbreak();
+    }
+
+    if (screenInfoOld._scrollMargins != screenInfoNew._scrollMargins)
+    {
+        __debugbreak();
+    }
+    if (screenInfoOld._viewport != screenInfoNew._viewport)
+    {
+        __debugbreak();
+    }
+    if (screenInfoOld._virtualBottom != screenInfoNew._virtualBottom)
+    {
+        __debugbreak();
+    }
+
+    if (cursorOld._cPosition != cursorNew._cPosition)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fHasMoved != cursorNew._fHasMoved)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fIsVisible != cursorNew._fIsVisible)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fIsOn != cursorNew._fIsOn)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fIsDouble != cursorNew._fIsDouble)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fBlinkingAllowed != cursorNew._fBlinkingAllowed)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fDelay != cursorNew._fDelay)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fIsConversionArea != cursorNew._fIsConversionArea)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fIsPopupShown != cursorNew._fIsPopupShown)
+    {
+        __debugbreak();
+    }
+    if (cursorOld._fDelayedEolWrap != cursorNew._fDelayedEolWrap)
+    {
+        //__debugbreak();
+    }
+    if (cursorOld._coordDelayedAt != cursorNew._coordDelayedAt)
+    {
+        //__debugbreak();
+    }
+
+    {
+        auto bufferOld = textBufferOld.GetTextDataAt({});
+        auto bufferNew = textBufferNew.GetTextDataAt({});
+
+        for (;;)
+        {
+            const auto okOld = static_cast<bool>(bufferOld);
+            const auto okNew = static_cast<bool>(bufferNew);
+            if (okOld != okNew)
+            {
+                __debugbreak();
+            }
+            if (!okOld)
+            {
+                break;
+            }
+
+            const auto posOld = bufferOld.Pos();
+            const auto posNew = bufferNew.Pos();
+             if (posOld != posNew)
+            {
+                __debugbreak();
+            }
+
+            const auto charsOld = *bufferOld;
+            const auto charsNew = *bufferNew;
+            if (charsOld != charsNew)
+            {
+                __debugbreak();
+            }
+
+            ++bufferOld;
+            ++bufferNew;
+        }
+    }
+
+    *pcb = pcbOld;
+    if (pcSpaces)
+    {
+        *pcSpaces = pcSpacesOld;
+    }
+    if (psScrollY)
+    {
+        *psScrollY = psScrollYOld;
+    }
+    return hrOld;
 }
 
 // Routine Description:

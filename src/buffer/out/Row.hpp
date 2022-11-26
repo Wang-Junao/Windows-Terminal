@@ -66,6 +66,8 @@ public:
     OutputCellIterator WriteCells(OutputCellIterator it, til::CoordType columnBegin, std::optional<bool> wrap = std::nullopt, std::optional<til::CoordType> limitRight = std::nullopt);
     bool SetAttrToEnd(til::CoordType columnBegin, TextAttribute attr);
     void ReplaceAttributes(til::CoordType beginIndex, til::CoordType endIndex, const TextAttribute& newAttr);
+    til::CoordType PrecedingColumn(til::CoordType column) const noexcept;
+    til::CoordType ReplaceCharacters(til::CoordType beginIndex, std::wstring_view& chars);
     void ReplaceCharacters(til::CoordType columnBegin, til::CoordType width, const std::wstring_view& chars);
 
     const til::small_rle<TextAttribute, uint16_t, 1>& Attributes() const noexcept;

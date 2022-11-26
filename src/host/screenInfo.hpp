@@ -164,11 +164,9 @@ public:
 
     short WheelDelta;
     short HWheelDelta;
-
-private:
+    
     std::unique_ptr<TextBuffer> _textBuffer;
-
-public:
+    
     SCREEN_INFORMATION* Next;
     BYTE WriteConsoleDbcsLeadByte[2];
     BYTE FillOutDbcsLeadChar;
@@ -231,7 +229,6 @@ public:
     void SetIgnoreLegacyEquivalentVTAttributes() noexcept;
     void ResetIgnoreLegacyEquivalentVTAttributes() noexcept;
 
-private:
     SCREEN_INFORMATION(_In_ Microsoft::Console::Interactivity::IWindowMetrics* pMetrics,
                        _In_ Microsoft::Console::Interactivity::IAccessibilityNotifier* pNotifier,
                        const TextAttribute popupAttributes,
@@ -276,6 +273,7 @@ private:
     //      window client (the "viewport" into the buffer)
     Microsoft::Console::Types::Viewport _viewport;
 
+    SCREEN_INFORMATION* _oldBuffer;
     SCREEN_INFORMATION* _psiAlternateBuffer; // The VT "Alternate" screen buffer.
     SCREEN_INFORMATION* _psiMainBuffer; // A pointer to the main buffer, if this is the alternate buffer.
 

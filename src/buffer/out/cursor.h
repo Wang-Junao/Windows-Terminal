@@ -82,8 +82,7 @@ public:
     bool IsDelayedEOLWrap() const noexcept;
 
     void SetType(const CursorType type) noexcept;
-
-private:
+    
     TextBuffer& _parentBuffer;
 
     //TODO: separate the rendering and text placement

@@ -54,6 +54,24 @@ using namespace Microsoft::Console::Interactivity;
         gci.ScreenBuffers[0].IncrementOriginalScreenBuffer();
     }
 
+    {
+        std::ignore = SCREEN_INFORMATION::CreateInstance(gci.GetWindowSize(),
+                                                         fiFont,
+                                                         gci.GetScreenBufferSize(),
+                                                         TextAttribute{},
+                                                         TextAttribute{ gci.GetPopupFillAttribute() },
+                                                         gci.GetCursorSize(),
+                                                         &gci.ScreenBuffers->_oldBuffer);
+
+        // TODO: MSFT 9355013: This needs to be resolved. We increment it once with no handle to ensure it's never cleaned up
+        // and one always exists for the renderer (and potentially other functions.)
+        // It's currently a load-bearing piece of code. http://osgvsowi/9355013
+        if (NT_SUCCESS(Status))
+        {
+            gci.ScreenBuffers->_oldBuffer[0].IncrementOriginalScreenBuffer();
+        }
+    }
+
     return Status;
 }
 

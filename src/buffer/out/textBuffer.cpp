@@ -372,6 +372,58 @@ bool TextBuffer::_PrepareForDoubleByteSequence(const DbcsAttribute dbcsAttribute
     return fSuccess;
 }
 
+til::point TextBuffer::Write(til::point& target, std::wstring_view text, const TextAttribute& attributes)
+{
+    const auto width = GetSize().Width();
+    auto x = target.x;
+    auto y = target.y;
+    til::point written;
+
+    if (text.empty())
+    {
+        return written;
+    }
+
+    do
+    {
+        // TODO ENABLE_WRAP_AT_EOL_OUTPUT
+        if (x >= width)
+        {
+            x = 0;
+            y++;
+            written.y++;
+
+            if (y > GetSize().BottomInclusive())
+            {
+                y = GetSize().BottomInclusive();
+                IncrementCircularBuffer();
+            }
+        }
+
+        auto& row = GetRowByOffset(y);
+        const auto newx = row.ReplaceCharacters(x, text);
+        row.ReplaceAttributes(x, newx, attributes);
+
+        written.x += newx - x;
+        x = newx;
+    }
+    while (!text.empty());
+
+    if (!written.y)
+    {
+        TriggerRedraw(Viewport::FromDimensions(target, { written.x, 1 }));
+    }
+    else
+    {
+        const auto height = std::min(written.y + 1, _size.Height());
+        const auto vy = target.y - height + 1;
+        TriggerRedraw(Viewport::FromDimensions({ 0, vy }, { width, height }));
+    }
+
+    target = { x, y };
+    return written;
+}
+
 // Routine Description:
 // - Writes cells to the output buffer. Writes at the cursor.
 // Arguments:
