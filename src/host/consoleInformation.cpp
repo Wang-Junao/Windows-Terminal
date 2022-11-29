@@ -399,11 +399,7 @@ void CONSOLE_INFORMATION::ShutdownMidiAudio()
 {
     if (_midiAudio)
     {
-        // We lock the console here to make sure the shutdown promise is
-        // set before the audio is unlocked in the thread that is playing.
-        LockConsole();
         _midiAudio->Shutdown();
-        UnlockConsole();
     }
 }
 
