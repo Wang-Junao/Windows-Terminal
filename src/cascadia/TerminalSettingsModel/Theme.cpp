@@ -6,6 +6,7 @@
 #include "../../types/inc/Utils.hpp"
 #include "../../types/inc/colorTable.hpp"
 #include "Utils.h"
+#include "SettingsUtils.h"
 #include "JsonUtils.h"
 #include "TerminalSettingsSerializationHelpers.h"
 
@@ -322,6 +323,20 @@ winrt::hstring Theme::ToString()
 winrt::WUX::ElementTheme Theme::RequestedTheme() const noexcept
 {
     return _Window ? _Window.RequestedTheme() : winrt::WUX::ElementTheme::Default;
+}
+
+bool Theme::IsActuallyDarkTheme() const
+{
+    switch (RequestedTheme())
+    {
+    case winrt::Windows::UI::Xaml::ElementTheme::Light:
+        return false;
+    case winrt::Windows::UI::Xaml::ElementTheme::Dark:
+        return true;
+    case winrt::Windows::UI::Xaml::ElementTheme::Default:
+    default:
+        return IsSystemInDarkTheme();
+    }
 }
 
 winrt::com_ptr<ThemePair> ThemePair::FromJson(const Json::Value& json)

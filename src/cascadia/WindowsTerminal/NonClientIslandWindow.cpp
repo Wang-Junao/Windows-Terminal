@@ -513,8 +513,8 @@ void NonClientIslandWindow::_OnMaximizeChange() noexcept
         const auto isIconified = WI_IsFlagSet(windowStyle, WS_ICONIC);
 
         const auto state = _isMaximized ? winrt::TerminalApp::WindowVisualState::WindowVisualStateMaximized :
-                           isIconified  ? winrt::TerminalApp::WindowVisualState::WindowVisualStateIconified :
-                                          winrt::TerminalApp::WindowVisualState::WindowVisualStateNormal;
+                                          isIconified ? winrt::TerminalApp::WindowVisualState::WindowVisualStateIconified :
+                                                        winrt::TerminalApp::WindowVisualState::WindowVisualStateNormal;
 
         try
         {
@@ -1048,21 +1048,9 @@ void NonClientIslandWindow::_UpdateFrameMargins() const noexcept
 // - This method is called when the window receives the WM_NCCREATE message.
 // Return Value:
 // - The value returned from the window proc.
-[[nodiscard]] LRESULT NonClientIslandWindow::_OnNcCreate(WPARAM wParam, LPARAM lParam) noexcept
+[[nodiscard]] LRESULT NonClientIslandWindow::OnNcCreate(WPARAM wParam, LPARAM lParam) noexcept
 {
-    const auto ret = IslandWindow::_OnNcCreate(wParam, lParam);
-    if (!ret)
-    {
-        return FALSE;
-    }
-
-    // This is a hack to make the window borders dark instead of light.
-    // It must be done before WM_NCPAINT so that the borders are rendered with
-    // the correct theme.
-    // For more information, see GH#6620.
-    LOG_IF_FAILED(TerminalTrySetDarkTheme(_window.get(), true));
-
-    return TRUE;
+    return IslandWindow::OnNcCreate(wParam, lParam);
 }
 
 // Method Description:
