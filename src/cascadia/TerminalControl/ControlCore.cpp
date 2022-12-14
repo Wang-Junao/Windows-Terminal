@@ -731,12 +731,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _cellWidth = CSSLengthPercentage::FromString(_settings->CellWidth().c_str());
         _cellHeight = CSSLengthPercentage::FromString(_settings->CellHeight().c_str());
 
-        // GH#11285 - If the user is on Windows 10, and they wanted opacity, but
-        // didn't explicitly request acrylic, then opt them in to acrylic.
-        // On Windows 11+, this isn't needed, because we can have vintage opacity.
-        // Instead, disable acrylic while the opacity is 100%
-        _runtimeUseAcrylic = _settings->Opacity() < 1.0 && (!IsVintageOpacityAvailable() || _settings->UseAcrylic());
         _runtimeOpacity = std::nullopt;
+
+        // Manually turn off acrylic if they turn off transparency.
+        _runtimeUseAcrylic = _settings->Opacity() < 1.0 && _settings->UseAcrylic();
 
         // Manually turn off acrylic if they turn off transparency.
         _runtimeUseAcrylic = _settings->Opacity() < 1.0 && _settings->UseAcrylic();

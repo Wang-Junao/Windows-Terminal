@@ -196,8 +196,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         hstring ReadEntireBuffer() const;
 
-        static bool IsVintageOpacityAvailable() noexcept;
-
         void AdjustOpacity(const double opacity, const bool relative);
 
         void WindowVisibilityChanged(const bool showOrHide);
