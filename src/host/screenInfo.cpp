@@ -2418,7 +2418,13 @@ OutputCellRect SCREEN_INFORMATION::ReadRect(const Viewport viewport) const
 // - will throw exception on error.
 OutputCellIterator SCREEN_INFORMATION::Write(const OutputCellIterator it)
 {
+    if (_insertMode)
+    {
+    return _textBuffer->Insert(it);   
+    } else
+    {
     return _textBuffer->Write(it);
+    }
 }
 
 // Routine Description:

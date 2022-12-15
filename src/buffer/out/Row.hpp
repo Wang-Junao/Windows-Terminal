@@ -37,6 +37,14 @@ enum class DelimiterClass
     RegularChar
 };
 
+struct TextInsertionIterator
+{
+    std::wstring_view chars;
+    std::span<uint16_t> charIndices;
+    size_t charOffset = 0;
+    size_t charIndicesOffset = 0;
+};
+
 class ROW final
 {
 public:
@@ -67,6 +75,7 @@ public:
     bool SetAttrToEnd(til::CoordType columnBegin, TextAttribute attr);
     void ReplaceAttributes(til::CoordType beginIndex, til::CoordType endIndex, const TextAttribute& newAttr);
     void ReplaceCharacters(til::CoordType columnBegin, til::CoordType width, const std::wstring_view& chars);
+    til::CoordType ReplaceCharacters(til::CoordType columnBegin, std::wstring_view chars, std::span<uint16_t> charIndices);
 
     const til::small_rle<TextAttribute, uint16_t, 1>& Attributes() const noexcept;
     TextAttribute GetAttrByColumn(til::CoordType column) const;

@@ -4,7 +4,17 @@
 #include "precomp.h"
 #include "Row.hpp"
 
+#include <til/unicode.h>
+
 #include "textBuffer.hpp"
+#include "../src/types/inc/GlyphWidth.hpp"
+
+#define ASSERT(b)           \
+    do                      \
+    {                       \
+        if (!(b))           \
+            __debugbreak(); \
+    } while (false)
 
 // The STL is missing a std::iota_n analogue for std::iota, so I made my own.
 template<typename OutIt, typename Diff, typename T>
@@ -373,12 +383,41 @@ void ROW::ReplaceAttributes(const til::CoordType beginIndex, const til::CoordTyp
 
 void ROW::ReplaceCharacters(til::CoordType columnBegin, til::CoordType width, const std::wstring_view& chars)
 {
-    const auto colBeg = _clampedUint16(columnBegin);
-    const auto colEnd = _clampedUint16(columnBegin + width);
+    std::array<uint16_t, 2> charIndices{ 0, _clampedUint16(columnBegin + width) };
+    ReplaceCharacters(columnBegin, chars, charIndices);
+}
 
-    if (colBeg >= colEnd || colEnd > _columnCount || chars.empty())
+til::CoordType ROW::ReplaceCharacters(til::CoordType columnBegin, std::wstring_view chars, std::span<uint16_t> charIndices)
+{
+    if (chars.empty() || charIndices.size() < 2)
     {
-        return;
+        // Callers should probably make sure to not call us in the first place if chars/charIndices are empty.
+        assert(false);
+        return columnBegin;
+    }
+
+    const auto charIndicesFirst = charIndices.front();
+    const auto charIndicesLast = charIndices.back();
+
+    // charIndices should not contain any partial wide glyphs.
+    // Throwing away the input data is probably better than crashing, so we just return here.
+    if (WI_IsFlagSet(charIndicesFirst, CharOffsetsTrailer) || WI_IsFlagSet(charIndicesLast, CharOffsetsTrailer))
+    {
+        assert(false);
+        LOG_HR_MSG(E_UNEXPECTED, "ReplaceCharacters with damaged charIndices");
+        return columnBegin;
+    }
+
+    const auto width = charIndicesLast - charIndicesFirst;
+    const auto columnEnd = columnBegin + width;
+    const auto colBeg = _clampedUint16(columnBegin);
+    const auto colEnd = _clampedUint16(columnEnd);
+
+    if (colBeg >= colEnd || colEnd > _columnCount)
+    {
+        assert(false);
+        LOG_HR_MSG(E_UNEXPECTED, "ReplaceCharacters out of bounds");
+        return columnBegin;
     }
 
     // Safety:
@@ -456,6 +495,8 @@ void ROW::ReplaceCharacters(til::CoordType columnBegin, til::CoordType width, co
 
         it = iota_n_mut(it, trailingSpaces, chPos);
     }
+
+    return columnEnd;
 }
 
 // This function represents the slow path of ReplaceCharacters(),

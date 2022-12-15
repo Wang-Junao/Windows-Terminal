@@ -48,6 +48,8 @@ namespace Microsoft::Console::VirtualTerminal
             SGR,
             DECSC,
             DECRC,
+            SM,
+            RM,
             DECSET,
             DECRST,
             DECKPAM,

@@ -58,7 +58,6 @@ public:
     const OutputCellView& operator*() const noexcept;
     const OutputCellView* operator->() const noexcept;
 
-private:
     enum class Mode
     {
         // Loose mode is where we're given text and attributes in a raw sort of form
@@ -84,6 +83,14 @@ private:
         // from accessing/copying data already put into the OutputBuffer.
         Cell,
     };
+
+    // These functions exist to circumvent OutputCellIterator's jack of all trades greatness.
+    Mode GetMode() const noexcept;
+    std::wstring_view GetText() const;
+    TextAttribute GetAttr() const noexcept;
+    void ConsumeAllText(size_t distance);
+
+private:
     Mode _mode;
 
     gsl::span<const WORD> _legacyAttrs;

@@ -294,6 +294,7 @@ private:
     til::CoordType _virtualBottom;
 
     bool _ignoreLegacyEquivalentVTAttributes;
+    bool _insertMode = false;
 
     std::optional<til::size> _deferredPtyResize{ std::nullopt };
 

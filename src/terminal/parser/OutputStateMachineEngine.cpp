@@ -512,6 +512,18 @@ bool OutputStateMachineEngine::ActionCsiDispatch(const VTID id, const VTParamete
         });
         TermTelemetry::Instance().Log(TermTelemetry::Codes::DECSEL);
         break;
+    case CsiActionCodes::SM_ModeSet:
+        success = parameters.for_each([&](const auto mode) {
+            return _dispatch->SetMode(DispatchTypes::ANSIStandardMode(mode));
+        });
+        TermTelemetry::Instance().Log(TermTelemetry::Codes::SM);
+        break;
+    case CsiActionCodes::RM_ModeReset:
+        success = parameters.for_each([&](const auto mode) {
+            return _dispatch->ResetMode(DispatchTypes::ANSIStandardMode(mode));
+        });
+        TermTelemetry::Instance().Log(TermTelemetry::Codes::RM);
+        break;
     case CsiActionCodes::DECSET_PrivateModeSet:
         success = parameters.for_each([&](const auto mode) {
             return _dispatch->SetMode(DispatchTypes::DECPrivateMode(mode));

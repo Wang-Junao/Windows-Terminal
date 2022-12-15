@@ -323,6 +323,27 @@ const OutputCellView* OutputCellIterator::operator->() const noexcept
     return &_currentView;
 }
 
+OutputCellIterator::Mode OutputCellIterator::GetMode() const noexcept
+{
+    return _mode;
+}
+
+std::wstring_view OutputCellIterator::GetText() const
+{
+    return std::get<std::wstring_view>(_run);
+}
+
+TextAttribute OutputCellIterator::GetAttr() const noexcept
+{
+    return _attr;
+}
+
+void OutputCellIterator::ConsumeAllText(size_t distance)
+{
+    _distance = distance;
+    _pos = GetText().size();
+}
+
 // Routine Description:
 // - Checks the current view. If it is a leading half, it updates the current
 //   view to the trailing half of the same glyph.

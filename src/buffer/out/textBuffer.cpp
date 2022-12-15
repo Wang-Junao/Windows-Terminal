@@ -393,6 +393,41 @@ OutputCellIterator TextBuffer::Write(const OutputCellIterator givenIt)
 }
 
 // Routine Description:
+// - Writes cells to the output buffer. Writes at the cursor.
+// Arguments:
+// - givenIt - Iterator representing output cell data to write
+// Return Value:
+// - The final position of the iterator
+OutputCellIterator TextBuffer::Insert(OutputCellIterator it)
+{
+    if (it.GetMode() != OutputCellIterator::Mode::Loose)
+    {
+        assert(false && "unsupported mode");
+        return it;
+    }
+
+    const auto& cursor = GetCursor();
+    const auto target = cursor.GetPosition();
+    const auto size = GetSize();
+
+    if (it && size.IsInBounds(target))
+    {
+        const auto text = it.GetText();
+        const auto attr = it.GetAttr();
+
+        auto& row = GetRowByOffset(target.y);
+        const auto end = row.InsertText(target.x, text, attr);
+        const auto written = end - target.x;
+        const auto invalidated = row.size() - target.x;
+
+        it.ConsumeAllText(written);
+        TriggerRedraw(Viewport::FromDimensions(target, { invalidated, 1 }));
+    }
+
+    return it;
+}
+
+// Routine Description:
 // - Writes cells to the output buffer.
 // Arguments:
 // - givenIt - Iterator representing output cell data to write

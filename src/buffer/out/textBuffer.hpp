@@ -90,6 +90,7 @@ public:
 
     // Text insertion functions
     OutputCellIterator Write(const OutputCellIterator givenIt);
+    OutputCellIterator Insert(OutputCellIterator it);
 
     OutputCellIterator Write(const OutputCellIterator givenIt,
                              const til::point target,
